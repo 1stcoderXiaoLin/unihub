@@ -16,6 +16,17 @@ export interface LocalApp {
   type: 'app'
 }
 
+// 插件注册的搜索项
+export interface PluginSearchItem {
+  id: string
+  title: string
+  subtitle?: string
+  icon?: string
+  keywords: string[]
+  data?: unknown
+  pluginId: string
+}
+
 // 统一搜索结果
 export interface UnifiedSearchResult {
   id: string
@@ -25,8 +36,10 @@ export interface UnifiedSearchResult {
   keywords: string[]
   category: string
   score: number
-  type: 'plugin' | 'app'
+  type: 'plugin' | 'app' | 'plugin-item'
   path?: string // 应用路径
+  pluginId?: string // 所属插件 ID（仅 plugin-item 类型）
+  data?: unknown // 附加数据（仅 plugin-item 类型）
 }
 
 // 搜索索引项
@@ -42,9 +55,11 @@ interface SearchIndexItem {
   keywordsLower: string[]
   category: string
   categoryLower: string
-  type: 'plugin' | 'app'
+  type: 'plugin' | 'app' | 'plugin-item'
   icon: string
   path?: string
+  pluginId?: string // 所属插件 ID（仅 plugin-item 类型）
+  data?: unknown // 附加数据（仅 plugin-item 类型）
 }
 
 /**
@@ -141,6 +156,44 @@ export class UnifiedSearchEngine {
   }
 
   /**
+   * 构建插件搜索项索引
+   */
+  buildPluginSearchIndex(items: PluginSearchItem[]): void {
+    // 先清除旧的插件搜索项索引
+    for (const [id, item] of this.index.entries()) {
+      if (item.type === 'plugin-item') {
+        this.index.delete(id)
+      }
+    }
+
+    // 添加新的插件搜索项索引
+    for (const item of items) {
+      const indexId = `plugin-item:${item.pluginId}:${item.id}`
+
+      this.index.set(indexId, {
+        id: indexId,
+        name: item.title,
+        nameLower: item.title.toLowerCase(),
+        namePinyin: this.getPinyin(item.title),
+        namePinyinInitials: this.getPinyinInitials(item.title),
+        description: item.subtitle || '',
+        descriptionLower: (item.subtitle || '').toLowerCase(),
+        keywords: item.keywords,
+        keywordsLower: item.keywords.map((k) => k.toLowerCase()),
+        category: 'plugin-item',
+        categoryLower: 'plugin-item',
+        type: 'plugin-item',
+        icon: item.icon || '',
+        pluginId: item.pluginId,
+        data: item.data
+      })
+    }
+
+    // 清除搜索缓存
+    this.searchCache.clear()
+  }
+
+  /**
    * 搜索（插件 + 应用）
    */
   search(query: string, plugins: Plugin[]): UnifiedSearchResult[] {
@@ -229,7 +282,9 @@ export class UnifiedSearchEngine {
           category: item.category,
           score,
           type: item.type,
-          path: item.path
+          path: item.path,
+          pluginId: item.pluginId,
+          data: item.data
         })
       }
     }

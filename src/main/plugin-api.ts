@@ -6,6 +6,7 @@ import { app } from 'electron'
 import { permissionManager } from './permission-manager'
 import { clipboardMonitor } from './clipboard-monitor'
 import { lmdbManager } from './lmdb-manager'
+import { pluginSearchRegistry, type PluginSearchItem } from './plugin-search-registry'
 
 /**
  * 插件 API 处理器
@@ -410,6 +411,69 @@ export class PluginAPI {
             icon: options.icon as string
           }).show()
           return { success: true }
+        } catch (error: unknown) {
+          return { success: false, error: (error as Error).message }
+        }
+      }
+    )
+
+    // 插件搜索项注册 API
+    ipcMain.handle(
+      'plugin-api:search:register',
+      async (event, items: PluginSearchItem[]) => {
+        try {
+          const pluginId = this.getPluginIdFromEvent(event)
+          pluginSearchRegistry.register(pluginId, items)
+          return { success: true }
+        } catch (error: unknown) {
+          return { success: false, error: (error as Error).message }
+        }
+      }
+    )
+
+    ipcMain.handle('plugin-api:search:unregister', async (event, itemIds?: string[]) => {
+      try {
+        const pluginId = this.getPluginIdFromEvent(event)
+        pluginSearchRegistry.unregister(pluginId, itemIds)
+        return { success: true }
+      } catch (error: unknown) {
+        return { success: false, error: (error as Error).message }
+      }
+    })
+
+    ipcMain.handle('plugin-api:search:getAll', async () => {
+      try {
+        const items = pluginSearchRegistry.getAll()
+        return { success: true, data: items }
+      } catch (error: unknown) {
+        return { success: false, error: (error as Error).message }
+      }
+    })
+
+    // 触发插件搜索项
+    ipcMain.handle(
+      'plugin-search:trigger',
+      async (_event, pluginId: string, itemId: string, data: unknown) => {
+        try {
+          // 找到对应插件的 WebContentsView 并发送消息
+          const allWindows = BrowserWindow.getAllWindows()
+          for (const win of allWindows) {
+            // 遍历所有 webContents 找到对应插件
+            const views = win.contentView.children
+            for (const view of views) {
+              if ('webContents' in view) {
+                const webContents = (view as { webContents: Electron.WebContents }).webContents
+                const url = webContents.getURL()
+                if (url.includes(`__plugin_id=${pluginId}`)) {
+                  // 向插件发送触发事件
+                  webContents.send('plugin-search-trigger', { itemId, data })
+                  return { success: true }
+                }
+              }
+            }
+          }
+          // 如果插件未加载，返回提示
+          return { success: false, error: '插件未加载' }
         } catch (error: unknown) {
           return { success: false, error: (error as Error).message }
         }

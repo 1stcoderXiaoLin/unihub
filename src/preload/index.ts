@@ -144,7 +144,12 @@ const api = {
   },
   search: {
     openPlugin: (pluginId: string) => ipcRenderer.invoke('search:open-plugin', pluginId),
-    close: () => ipcRenderer.invoke('search:close')
+    close: () => ipcRenderer.invoke('search:close'),
+    // 获取插件注册的搜索项
+    getPluginItems: async () => {
+      const result = await ipcRenderer.invoke('plugin-api:search:getAll')
+      return result.success ? result.data : []
+    }
   },
   apps: {
     list: () => ipcRenderer.invoke('apps:list'),
@@ -330,6 +335,44 @@ const unihubAPI = {
     show: async (options: { title: string; body: string; icon?: string }) => {
       const result = await ipcRenderer.invoke('plugin-api:notification:show', options)
       if (!result.success) throw new Error(result.error || '显示通知失败')
+    }
+  },
+  // 搜索 API（用于插件注册搜索项）
+  search: {
+    // 注册搜索项
+    register: async (
+      items: Array<{
+        id: string
+        title: string
+        subtitle?: string
+        icon?: string
+        keywords: string[]
+        data?: unknown
+      }>
+    ) => {
+      const result = await ipcRenderer.invoke('plugin-api:search:register', items)
+      if (!result.success) throw new Error(result.error || '注册搜索项失败')
+    },
+    // 取消注册搜索项
+    unregister: async (itemIds?: string[]) => {
+      const result = await ipcRenderer.invoke('plugin-api:search:unregister', itemIds)
+      if (!result.success) throw new Error(result.error || '取消注册搜索项失败')
+    },
+    // 获取所有注册的搜索项
+    getAll: async () => {
+      const result = await ipcRenderer.invoke('plugin-api:search:getAll')
+      if (!result.success) throw new Error(result.error || '获取搜索项失败')
+      return result.data || []
+    },
+    // 监听搜索项触发事件
+    onTrigger: (callback: (data: { itemId: string; data?: unknown }) => void) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: { itemId: string; data?: unknown }
+      ): void => callback(data)
+      ipcRenderer.on('plugin-search-trigger', handler)
+      return (): Electron.IpcRenderer =>
+        ipcRenderer.removeListener('plugin-search-trigger', handler)
     }
   }
 }

@@ -4,7 +4,8 @@ import { pluginRegistry } from '../plugins'
 import {
   unifiedSearchEngine,
   type UnifiedSearchResult,
-  type LocalApp
+  type LocalApp,
+  type PluginSearchItem
 } from '@/utils/unified-search'
 import { CATEGORY_NAMES } from '@/constants'
 import { Kbd } from '@/components/ui/kbd'
@@ -14,6 +15,7 @@ import LazyAppIcon from './LazyAppIcon.vue'
 const emit = defineEmits<{
   openPlugin: [pluginId: string]
   openApp: [appPath: string]
+  triggerPluginItem: [pluginId: string, itemId: string, data: unknown]
   close: []
 }>()
 
@@ -28,7 +30,21 @@ const searchInput = ref<HTMLInputElement>()
 const resultRefs = ref<HTMLElement[]>([])
 const isScrolling = ref(false)
 const localApps = ref<LocalApp[]>([])
+const pluginSearchItems = ref<PluginSearchItem[]>([])
 let scrollTimeout: ReturnType<typeof setTimeout> | null = null
+
+// 加载插件注册的搜索项
+const loadPluginSearchItems = async (): Promise<void> => {
+  try {
+    // 从主进程获取插件注册的搜索项
+    const items = (await window.api.search.getPluginItems()) as PluginSearchItem[]
+    pluginSearchItems.value = items
+    unifiedSearchEngine.buildPluginSearchIndex(items)
+    console.log(`[GlobalSearch] 加载了 ${items.length} 个插件搜索项`)
+  } catch (error) {
+    console.warn('[GlobalSearch] 加载插件搜索项失败:', error)
+  }
+}
 
 // 加载本地应用列表（混合策略：快速加载 + 渐进式图标预加载）
 const loadApps = async (): Promise<void> => {
@@ -91,6 +107,9 @@ watch(
   () => props.visible,
   (visible) => {
     if (visible) {
+      // 刷新插件搜索项
+      loadPluginSearchItems()
+
       // 使用 nextTick 确保 DOM 已更新
       nextTick(() => {
         // 强制聚焦函数
@@ -194,11 +213,28 @@ const handleKeyDown = (e: KeyboardEvent): void => {
   }
 }
 
-const selectResult = (result: UnifiedSearchResult): void => {
+const selectResult = async (result: UnifiedSearchResult): Promise<void> => {
   if (result.type === 'plugin') {
     emit('openPlugin', result.id)
   } else if (result.type === 'app' && result.path) {
     emit('openApp', result.path)
+  } else if (result.type === 'plugin-item' && result.pluginId) {
+    // 触发插件搜索项
+    // 从 id 中解析出实际的 itemId: "plugin-item:pluginId:itemId"
+    const parts = result.id.split(':')
+    const itemId = parts.slice(2).join(':') // 获取原始 itemId
+
+    try {
+      // 通知插件处理搜索项
+      await window.electron.ipcRenderer.invoke(
+        'plugin-search:trigger',
+        result.pluginId,
+        itemId,
+        result.data
+      )
+    } catch (error) {
+      console.error('[GlobalSearch] 触发插件搜索项失败:', error)
+    }
   }
   emit('close')
 }
@@ -215,6 +251,8 @@ onMounted(() => {
   window.addEventListener('keydown', handleKeyDown, true)
   // 加载本地应用
   loadApps()
+  // 加载插件搜索项
+  loadPluginSearchItems()
 })
 
 onUnmounted(() => {
@@ -285,7 +323,7 @@ onUnmounted(() => {
                   d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                 />
               </svg>
-              <p class="text-sm text-gray-500 dark:text-gray-400">未找到匹配的插件</p>
+              <p class="text-sm text-gray-500 dark:text-gray-400">未找到匹配结果</p>
             </div>
 
             <div
@@ -312,6 +350,26 @@ onUnmounted(() => {
                   <LazyAppIcon :app-path="result.path" :app-name="result.name" />
                 </div>
               </template>
+              <template v-else-if="result.type === 'plugin-item'">
+                <!-- 插件搜索项图标 - 使用闪电图标 -->
+                <div
+                  class="flex-shrink-0 w-10 h-10 rounded-lg bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white shadow-sm"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                  </svg>
+                </div>
+              </template>
               <PluginIcon v-else :icon="result.icon" size="md" />
 
               <!-- 信息 -->
@@ -331,6 +389,12 @@ onUnmounted(() => {
                     class="px-2 py-0.5 text-xs font-medium text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30 rounded"
                   >
                     应用
+                  </span>
+                  <span
+                    v-else-if="result.type === 'plugin-item'"
+                    class="px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/30 rounded"
+                  >
+                    文本片段
                   </span>
                 </div>
                 <p class="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">
@@ -425,7 +489,7 @@ onUnmounted(() => {
             d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
           />
         </svg>
-        <p class="text-sm text-gray-500 dark:text-gray-400">未找到匹配的插件</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400">未找到匹配结果</p>
       </div>
 
       <div
@@ -452,6 +516,26 @@ onUnmounted(() => {
             <LazyAppIcon :app-path="result.path" :app-name="result.name" />
           </div>
         </template>
+        <template v-else-if="result.type === 'plugin-item'">
+          <!-- 插件搜索项图标 - 使用闪电图标 -->
+          <div
+            class="flex-shrink-0 w-10 h-10 rounded-lg bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white shadow-sm"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+            </svg>
+          </div>
+        </template>
         <PluginIcon v-else :icon="result.icon" size="md" />
 
         <!-- 信息 -->
@@ -471,6 +555,12 @@ onUnmounted(() => {
               class="px-2 py-0.5 text-xs font-medium text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30 rounded"
             >
               应用
+            </span>
+            <span
+              v-else-if="result.type === 'plugin-item'"
+              class="px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/30 rounded"
+            >
+              文本片段
             </span>
           </div>
           <p class="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">
